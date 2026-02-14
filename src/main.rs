@@ -1,3 +1,130 @@
-fn main() {
-    println!("Hello, world!");
+use anyhow::Result;
+use pulldown_cmark::{html, Options, Parser};
+use regex::Regex;
+use serde::Deserialize;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    process::Command,
+};
+use syntect::{highlighting::ThemeSet, html::highlighted_html_for_string, parsing::SyntaxSet};
+
+#[derive(Debug, Deserialize)]
+struct Root {
+    #[serde(rename = "type")]
+    record_type: Option<String>,
+    message: Option<Message>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Message {
+    role: String,
+    content: Vec<ContentBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    text: Option<String>,
+}
+
+fn main() -> Result<()> {
+    let input = "input.jsonl";
+    let html_file = "output.html";
+    let pdf_file = "output.pdf";
+
+    let markdown = extract_conversation_markdown(input)?;
+    let html = render_markdown_with_highlighting(&markdown)?;
+
+    std::fs::write(html_file, html)?;
+    render_pdf(html_file, pdf_file)?;
+
+    Ok(())
+}
+
+fn extract_conversation_markdown(path: &str) -> Result<String> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let mut output = String::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let parsed: Root = serde_json::from_str(&line)?;
+
+        if parsed.record_type.as_deref() != Some("assistant")
+            && parsed.record_type.as_deref() != Some("user")
+        {
+            continue;
+        }
+
+        let message = match parsed.message {
+            Some(m) => m,
+            None => continue,
+        };
+
+        output.push_str(&format!("## {}\n\n", message.role));
+
+        for block in message.content {
+            if block.block_type != "text" {
+                continue;
+            }
+
+            if let Some(text) = block.text {
+                output.push_str(&text);
+                output.push_str("\n\n");
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn render_markdown_with_highlighting(md: &str) -> Result<String> {
+    let ps = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let theme = &ts.themes["base16-ocean.dark"];
+
+    let code_block_re = Regex::new(r"(?s)```(\w+)?\n(.*?)```")?;
+
+    let highlighted = code_block_re.replace_all(md, |caps: &regex::Captures| {
+        let lang = caps.get(1).map(|m| m.as_str()).unwrap_or("txt");
+        let code = caps.get(2).unwrap().as_str();
+
+        let syntax = ps
+            .find_syntax_by_token(lang)
+            .unwrap_or_else(|| ps.find_syntax_plain_text());
+
+        highlighted_html_for_string(code, &ps, syntax, theme)
+            .unwrap_or_else(|_| format!("<pre><code>{}</code></pre>", code))
+    });
+
+    let mut html_output = String::new();
+    let parser = Parser::new_ext(&highlighted, Options::all());
+    html::push_html(&mut html_output, parser);
+
+    Ok(format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {{ font-family: Arial, sans-serif; padding: 40px; }}
+pre {{ overflow-x: auto; }}
+code {{ font-family: monospace; }}
+h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
+</style>
+</head>
+<body>
+{}
+</body>
+</html>"#,
+        html_output
+    ))
+}
+
+fn render_pdf(html: &str, pdf: &str) -> Result<()> {
+    Command::new("wkhtmltopdf").arg(html).arg(pdf).status()?;
+    Ok(())
 }
