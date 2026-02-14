@@ -1,13 +1,29 @@
-use anyhow::Result;
-use pulldown_cmark::{html, Options, Parser};
-use regex::Regex;
-use serde::Deserialize;
 use std::{
     fs::File,
     io::{BufRead, BufReader},
+    path::Path,
+    path::PathBuf,
     process::Command,
 };
+
+use anyhow::Result;
+use clap::Parser as ClapParser;
+use pulldown_cmark::{html, Options, Parser};
+use regex::Regex;
+use serde::Deserialize;
 use syntect::{highlighting::ThemeSet, html::highlighted_html_for_string, parsing::SyntaxSet};
+
+/// Convert Claude Code JSONL conversations to syntax-highlighted PDFs.
+#[derive(ClapParser)]
+#[command(version, about)]
+struct Cli {
+    /// Path to the input JSONL file
+    input: PathBuf,
+
+    /// Path for the output PDF (defaults to <input>.pdf)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+}
 
 #[derive(Debug, Deserialize)]
 struct Root {
@@ -30,20 +46,23 @@ struct ContentBlock {
 }
 
 fn main() -> Result<()> {
-    let input = "input.jsonl";
-    let html_file = "output.html";
-    let pdf_file = "output.pdf";
+    let cli = Cli::parse();
 
-    let markdown = extract_conversation_markdown(input)?;
-    let html = render_markdown_with_highlighting(&markdown)?;
+    let pdf_file = cli
+        .output
+        .unwrap_or_else(|| cli.input.with_extension("pdf"));
+    let html_file = pdf_file.with_extension("html");
 
-    std::fs::write(html_file, html)?;
-    render_pdf(html_file, pdf_file)?;
+    let markdown = extract_conversation_markdown(&cli.input)?;
+    let html_content = render_markdown_with_highlighting(&markdown)?;
+
+    std::fs::write(&html_file, html_content)?;
+    render_pdf(&html_file, &pdf_file)?;
 
     Ok(())
 }
 
-fn extract_conversation_markdown(path: &str) -> Result<String> {
+fn extract_conversation_markdown(path: &Path) -> Result<String> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -124,7 +143,7 @@ h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
     ))
 }
 
-fn render_pdf(html: &str, pdf: &str) -> Result<()> {
+fn render_pdf(html: &Path, pdf: &Path) -> Result<()> {
     Command::new("wkhtmltopdf").arg(html).arg(pdf).status()?;
     Ok(())
 }
