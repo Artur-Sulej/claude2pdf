@@ -35,7 +35,14 @@ struct Root {
 #[derive(Debug, Deserialize)]
 struct Message {
     role: String,
-    content: Vec<ContentBlock>,
+    content: Content,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Content {
+    String(String),
+    Blocks(Vec<ContentBlock>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,8 +63,11 @@ fn main() -> Result<()> {
     let markdown = extract_conversation_markdown(&cli.input)?;
     let html_content = render_markdown_with_highlighting(&markdown)?;
 
+    // We need absolute path for Chrome to work reliably with file://
+    let abs_html_file = std::fs::canonicalize(std::env::current_dir()?)?.join(&html_file);
     std::fs::write(&html_file, html_content)?;
-    render_pdf(&html_file, &pdf_file)?;
+    
+    render_pdf(&abs_html_file, &pdf_file)?;
 
     Ok(())
 }
@@ -85,14 +95,22 @@ fn extract_conversation_markdown(path: &Path) -> Result<String> {
 
         output.push_str(&format!("## {}\n\n", message.role));
 
-        for block in message.content {
-            if block.block_type != "text" {
-                continue;
-            }
-
-            if let Some(text) = block.text {
+        match message.content {
+            Content::String(text) => {
                 output.push_str(&text);
                 output.push_str("\n\n");
+            }
+            Content::Blocks(blocks) => {
+                for block in blocks {
+                    if block.block_type != "text" {
+                        continue;
+                    }
+
+                    if let Some(text) = block.text {
+                        output.push_str(&text);
+                        output.push_str("\n\n");
+                    }
+                }
             }
         }
     }
@@ -130,7 +148,7 @@ fn render_markdown_with_highlighting(md: &str) -> Result<String> {
 <meta charset="utf-8">
 <style>
 body {{ font-family: Arial, sans-serif; padding: 40px; }}
-pre {{ overflow-x: auto; }}
+pre {{ overflow-x: auto; background-color: #2b303b; padding: 15px; border-radius: 5px; }}
 code {{ font-family: monospace; }}
 h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
 </style>
@@ -144,6 +162,18 @@ h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
 }
 
 fn render_pdf(html: &Path, pdf: &Path) -> Result<()> {
-    Command::new("wkhtmltopdf").arg(html).arg(pdf).status()?;
+    let chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    
+    let status = Command::new(chrome_path)
+        .arg("--headless")
+        .arg("--disable-gpu")
+        .arg(format!("--print-to-pdf={}", pdf.display()))
+        .arg(format!("file://{}", html.display()))
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Chrome failed to generate PDF");
+    }
+
     Ok(())
 }
