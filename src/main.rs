@@ -66,7 +66,7 @@ fn main() -> Result<()> {
     // We need absolute path for Chrome to work reliably with file://
     let abs_html_file = std::fs::canonicalize(std::env::current_dir()?)?.join(&html_file);
     std::fs::write(&html_file, html_content)?;
-    
+
     render_pdf(&abs_html_file, &pdf_file)?;
 
     Ok(())
@@ -93,10 +93,30 @@ fn extract_conversation_markdown(path: &Path) -> Result<String> {
             None => continue,
         };
 
-        output.push_str(&format!("## {}\n\n", message.role));
+        match &message.content {
+            Content::String(inner) => {
+                if inner.starts_with("/") {
+                    continue;
+                }
+                if inner.starts_with("<local-command-caveat>") {
+                    continue;
+                }
+                if inner.starts_with("<local-command-stdout>") {
+                    continue;
+                }
+                if inner.starts_with("<command-name>") {
+                    continue;
+                }
+                if inner.trim().is_empty() {
+                    continue;
+                }
+            }
+            _ => (),
+        }
 
         match message.content {
             Content::String(text) => {
+                output.push_str(&format!("## {}\n\n", message.role));
                 output.push_str(&text);
                 output.push_str("\n\n");
             }
@@ -107,6 +127,10 @@ fn extract_conversation_markdown(path: &Path) -> Result<String> {
                     }
 
                     if let Some(text) = block.text {
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        output.push_str(&format!("## {}\n\n", message.role));
                         output.push_str(&text);
                         output.push_str("\n\n");
                     }
@@ -163,7 +187,7 @@ h2 {{ border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
 
 fn render_pdf(html: &Path, pdf: &Path) -> Result<()> {
     let chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-    
+
     let status = Command::new(chrome_path)
         .arg("--headless")
         .arg("--disable-gpu")
