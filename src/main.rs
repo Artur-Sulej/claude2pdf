@@ -191,6 +191,7 @@ fn render_pdf(html: &Path, pdf: &Path) -> Result<()> {
     let status = Command::new(chrome_path)
         .arg("--headless")
         .arg("--disable-gpu")
+        .arg("--no-pdf-header-footer")
         .arg(format!("--print-to-pdf={}", pdf.display()))
         .arg(format!("file://{}", html.display()))
         .status()?;
